@@ -20,11 +20,13 @@ rm -f recon.db          # ensure first-run UX
 ls -la *.xlsx
 ```
 
-Confirm both files are present. If they aren't, stop and tell the demoer; otherwise continue.
+Confirm both files are present. If they aren't, stop and tell the demoer; otherwise continue with one clean line: "Both files are present. Starting the reconciliation."
 
 ## Scene 1 — The hook (~30 s)
 
-State out loud (one short paragraph): "Two xlsx files, ~5,500 rows total, completely different schemas. The user has nothing else — no parse spec, no column mapping, no business rules. Watch."
+Open with one short, professional sentence — no theatrics, no "watch":
+
+> "Two xlsx files from two different source systems. The tool will ingest them, identify their structure, decide how they relate, and reconcile in a single command."
 
 Run:
 
@@ -32,14 +34,20 @@ Run:
 tabrecon run --auto --file-a "Προιόντα από FPSL 30.04.2025.xlsx" --file-b "Προιόντα από EDW 30.04.2025.xlsx"
 ```
 
-After the full output prints, narrate **two short sentences** highlighting what just happened. Specifically point out:
+After the full output prints, deliver a **single professional confirmation** in this structure. Tone: matter-of-fact, reassuring, no marketing words like "win", "watch", "notice", "powerful". The audience should walk away thinking *"the data is understood, and the system is ready."*
 
-- the **duplicate-header auto-dedup** (`G/L Account (2)`, `Object Currency (2)`) — a real-world quirk handled silently
-- the **hierarchy detection** — `product group → product type` (FPSL), `system → product` (EDW)
-- the **auto-mapped keys + compare** with their rationale (overlap 0.502, overlap 0.978, largest-total decimal)
-- the **findings count** — 385 at level 0, with 23 DIFFER at level 1
+1. **Ingestion confirmation** — both files have been ingested and stored in SQLite. Row counts per side. The source system each represents (FPSL = the SAP-based subledger; EDW = the data warehouse extract).
+2. **Schema understood** — the columns on each side, named plainly. State that duplicate headings in the FPSL file (`G/L Account` and `Object Currency` appearing twice) were resolved automatically. Frame this as expected handling, not as a feature to admire.
+3. **Hierarchy identified from the data** — one sentence per side: *"In FPSL, Product Type rolls up into Product Group. In EDW, Product rolls up into System."* No configuration was supplied; both were derived from the data.
+4. **Mapping decided and persisted** — the tool chose Product Type ↔ Product as the top-level join (~50 % key overlap), G/L Account ↔ GL_ACCOUNT as the drill-down (~98 % overlap), and Closing Balance ↔ SUM_AMOUNT as the amount to compare. These decisions are stored in the database and will be reused on the next reconciliation of the same source systems — no further configuration needed.
+5. **Reconciliation completed** — two headline numbers, plainly stated: 385 differences at the product-type level; 23 cases at the GL × product drill-down where both systems carry a balance but disagree.
+6. **Closing line — the comfort line.** Single sentence: *"The reconciliation is complete and the database is ready. Any business question about these differences can be answered directly from here."*
 
-End the scene with: *"Questions on what you just saw, or shall I show how the tool figured out the structure?"* — and then **pause for the demoer's signal** before continuing. Do not roll into scene 2 automatically.
+End by **pausing**, with one open, professional prompt:
+
+> "Where would you like to start — looking at the differences themselves, or seeing how the tool reached this configuration?"
+
+Wait for the demoer's signal. Do not roll into scene 2 automatically.
 
 ## Scene 2 — How does it know? (~1 m)
 
