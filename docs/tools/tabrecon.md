@@ -17,6 +17,26 @@ Generic tabular reconciliation **engine + memory layer**, designed to be operate
 - Node.js ≥ 22.18 (built-in `node:sqlite`)
 - Runtime dependency: `fflate@^0.8.3` only (vetted 2026-06-12)
 
+## Installing as a system-wide command
+
+The tool's `package.json` declares `tabrecon` as a `bin`. To register it on `$PATH` so it works from any directory, run once per machine:
+
+```bash
+cd tools/tabrecon
+npm install        # only needed the first time
+npm link           # creates `tabrecon` in Node's bin directory
+```
+
+After that:
+
+```bash
+which tabrecon     # → /…/node/<version>/bin/tabrecon (or /opt/homebrew/bin/ on Homebrew)
+tabrecon --version # → tabrecon 0.2.0
+tabrecon ingest --file /any/path/to/data.csv --db /any/path/to/store.db
+```
+
+Without `npm link` the CLI is still usable as `node /path/to/tools/tabrecon/src/cli.ts …`. To uninstall the global command later: `npm unlink -g tabrecon` from the tool folder.
+
 ## Commands
 
 ```

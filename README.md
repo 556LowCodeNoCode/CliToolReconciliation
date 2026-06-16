@@ -21,32 +21,36 @@ The project synthesizes [`556LowCodeNoCode/acc-recon`](https://github.com/556Low
 You can run the test suite, ingest two files, and produce findings in under 60 seconds. The full surface is exactly nine commands; everything else lives in SQLite.
 
 ```bash
-# 1. install (single runtime dep)
-cd tools/tabrecon && npm install && cd ../..
+# 1. install dependencies (single runtime dep: fflate)
+cd tools/tabrecon && npm install
 
-# 2. run the suite (Node ≥ 22.18 required, type stripping is native)
-npm test                         # 34 tests, ~1 second
+# 2. register `tabrecon` as a system-wide command (one-time, per machine)
+npm link                            # creates `tabrecon` on PATH via Node's bin
 
-# 3. smoke test on synthetic data
+# 3. run the suite (Node ≥ 22.18 required, type stripping is native)
+cd ../.. && npm test                # 34 tests, ~1 second
+
+# 4. smoke test on synthetic data — works from any directory
 mkdir -p /tmp/try && cd /tmp/try
 printf 'Account,Product,Amount\n2001,P1,100.50\n2001,P2,200.00\n2003,P9,75.25\n' > a.csv
 printf 'GL Account,Product Code,Sum Amount\n20-01,P1,100.50\n20-01,P2,210.00\n20-04,P3,99.99\n' > b.csv
-CLI="node $OLDPWD/tools/tabrecon/src/cli.ts"
 
 # first run — exits 0 with "decisions_needed" + ranked key/level candidates
-$CLI run --file-a a.csv --file-b b.csv --db demo.db
+tabrecon run --file-a a.csv --file-b b.csv --db demo.db
 
 # record the decisions once (this is the pair's persistent memory)
-$CLI map --pair "a vs b" --db demo.db \
+tabrecon map --pair "a vs b" --db demo.db \
   --key "account=gl account" --key "product=product code:1" \
   --compare "amount=sum amount" --display "product=product code"
 
 # re-run — full pipeline, findings land in SQLite (no report file written)
-$CLI run --file-a a.csv --file-b b.csv --db demo.db
+tabrecon run --file-a a.csv --file-b b.csv --db demo.db
 
 # query findings — this is what the LLM does to shape any report
 sqlite3 demo.db "SELECT bucket, key_json, delta_micros FROM RunFinding WHERE level = 0;"
 ```
+
+> Without step 2 you'd run the CLI as `node /path/to/tools/tabrecon/src/cli.ts …` — `npm link` just wires it onto `$PATH` so `tabrecon` works from anywhere. Reverse with `npm unlink -g tabrecon` from the tool folder.
 
 The next month's files (same schemas, different rows) will run **with zero decisions** — the profile + pair memory recognizes them.
 
