@@ -1,15 +1,15 @@
 # NewRecon — `tabrecon`
 
-> Generic LLM-driven tabular-data reconciliation. A CLI that loads heterogeneous tabular files into SQLite, understands the data's structure (column types, fingerprints, hierarchies), persists per-pair memory of how the files fit together, and runs the structural reconciliation. **Business semantics and report shape live in the LLM/agent layer above the CLI**, not in the tool itself.
+> `tabrecon` is a generic, agent-operable CLI that prepares two tabular files for reconciliation and reconciles them — leaving business rules and report shape to the LLM/agent layer above.
 
-This project synthesizes two prior approaches into one:
+- **Loads** any tabular file (CSV / TXT / XLSX / fixed-width) into SQLite — auto-detects encoding, delimiter, header, and column types; canonicalizes amounts as exact decimals; dedups by SHA-256; refuses to guess.
+- **Remembers** files across runs via structural fingerprints — recognizes returning files, flags schema drift (hard abort / soft warn).
+- **Discovers** the data's own hierarchies (aggregation chains + 1:1 attributes) and uses them to propose reconciliation levels.
+- **Suggests** join keys with uniqueness / overlap statistics; persists the mapping decisions once so repeat runs are zero-decision.
+- **Reconciles** in exact decimal arithmetic — `MATCH` / `DIFFER` / `ONLY_A` / `ONLY_B`, with hierarchical drill-down to source rows.
+- **Persists** every finding to SQLite — the LLM/agent layer queries it to apply business semantics and shape whatever report the team needs.
 
-| Source | What we kept |
-|---|---|
-| [`556LowCodeNoCode/acc-recon`](https://github.com/556LowCodeNoCode/acc-recon) | Agent-operable TypeScript CLI, SQLite as the comparison substrate, SHA-256 dedup, exact decimal arithmetic, never-guess error contract |
-| [`556LowCodeNoCode/reconciliation-agent`](https://github.com/556LowCodeNoCode/reconciliation-agent) | Multi-format ingestion (delimited / xlsx / fixed-width via parse specs), fingerprint-based file recognition with drift detection, business-rule memory model, hierarchical drill-down |
-
-The synthesis adds two ideas the references don't have:
+The project synthesizes [`556LowCodeNoCode/acc-recon`](https://github.com/556LowCodeNoCode/acc-recon) (the agent-operable TypeScript CLI + SQLite + exact-decimal + never-guess foundation) with [`556LowCodeNoCode/reconciliation-agent`](https://github.com/556LowCodeNoCode/reconciliation-agent) (multi-format ingest, fingerprint memory, drift detection, hierarchical drill-down) and adds two ideas neither had:
 
 - **No built-in business rules and no built-in report format.** The CLI guarantees the structural part (ingest, recognition, hierarchy detection, reconciliation) is correct and identical every run. Business semantics — exclusions, FX, tolerances above the default, materiality floors, what counts as a "known one-sided" finding — are applied by the LLM/agent talking to the business team, in SQL on top of the persisted `RunFinding` / `Dataset<N>` / `ColumnHierarchy` tables.
 - **Column-hierarchy detection from the data itself.** Each ingested file is analyzed for pairwise functional dependencies, labeled `aggregation` (rollup chain: top → drill-down) or `descriptive` (1:1 attribute lookup). The aggregation chains drive the `suggest` command's proposed level ordering, so the LLM/operator doesn't have to guess the recon grain.
