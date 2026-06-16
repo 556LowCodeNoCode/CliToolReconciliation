@@ -1,0 +1,68 @@
+# Inbound sync: GitHub -> Azure DevOps, authenticated via GitHub App.
+# Primary trigger: GitHub webhook on every push (any branch, any tag).
+# Loop-breaker: skip when the push came from our own outbound App bot.
+
+trigger: none
+
+resources:
+  webhooks:
+    - webhook: githubpush
+      connection: github-bridge-webhook
+
+schedules:
+  - cron: "0 * * * *"
+    displayName: Hourly backstop poll
+    branches:
+      include: [main]
+    always: true
+
+variables:
+  - group: bridge-secrets
+  - name: GITHUB_REPO
+    value: 556LowCodeNoCode/CliToolReconciliation
+
+jobs:
+- job: sync
+  pool:
+    vmImage: ubuntu-latest
+  # Skip when the GitHub push that triggered us was made by our own outbound
+  # pipeline (the App bot). For cron/manual runs the template value is empty,
+  # so the condition passes and the job runs.
+  condition: ne('${{ parameters.githubpush.sender.login }}', '556-ado-bridge[bot]')
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    clean: true
+    persistCredentials: true
+
+  - bash: |
+      set -euo pipefail
+      echo "$GITHUB_APP_PRIVATE_KEY_B64" | base64 -d > /tmp/app.pem
+      header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 -w0 | tr -d '=' | tr '/+' '_-')
+      now=$(date +%s)
+      payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((now-60))" "$((now+540))" "$GITHUB_APP_ID" | base64 -w0 | tr -d '=' | tr '/+' '_-')
+      sig=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign /tmp/app.pem -binary | base64 -w0 | tr -d '=' | tr '/+' '_-')
+      jwt="$header.$payload.$sig"
+      token=$(curl -fsS -X POST -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/$GITHUB_APP_INSTALLATION_ID/access_tokens" | python3 -c "import json,sys;print(json.load(sys.stdin)['token'])")
+      echo "##vso[task.setvariable variable=GH_TOKEN;issecret=true]$token"
+      rm -f /tmp/app.pem
+    env:
+      GITHUB_APP_ID: $(GITHUB_APP_ID)
+      GITHUB_APP_INSTALLATION_ID: $(GITHUB_APP_INSTALLATION_ID)
+      GITHUB_APP_PRIVATE_KEY_B64: $(GITHUB_APP_PRIVATE_KEY_B64)
+    displayName: Mint GitHub App installation token
+
+  - bash: |
+      set -euo pipefail
+      git fetch --prune --prune-tags "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPO}.git" '+refs/heads/*:refs/remotes/github/*' '+refs/tags/*:refs/tags/*'
+      # Symmetric to the outbound pipeline: drop any symbolic refs/remotes/github/HEAD
+      # before the wildcard push, so we never write a literal refs/heads/HEAD on ADO.
+      # MUST be --no-deref / symbolic-ref to avoid deleting the TARGET ref (e.g. main).
+      git symbolic-ref --delete refs/remotes/github/HEAD 2>/dev/null \
+        || git update-ref --no-deref -d refs/remotes/github/HEAD 2>/dev/null \
+        || true
+      git push --prune origin '+refs/remotes/github/*:refs/heads/*'
+      git push --prune origin '+refs/tags/*:refs/tags/*'
+    env:
+      GH_TOKEN: $(GH_TOKEN)
+    displayName: Fetch from GitHub and push into ADO (full mirror, with prune)

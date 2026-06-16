@@ -1,0 +1,85 @@
+# Outbound mirror: Azure DevOps -> GitHub, authenticated via GitHub App.
+# Triggers:
+#   - ADO Service Hook on every git.push event (commits, branches, tags, deletes)
+#   - Hourly cron backstop
+# Loop-breaker: skip when the push came from the inbound pipeline (Build Service
+# identity), not from a real user.
+
+trigger: none
+
+resources:
+  webhooks:
+    - webhook: adopush
+      connection: ado-codepush-webhook
+
+schedules:
+  - cron: "0 * * * *"
+    displayName: Hourly backstop
+    branches:
+      include: [main]
+    always: true
+
+variables:
+  - group: bridge-secrets
+  - name: GITHUB_REPO
+    value: 556LowCodeNoCode/CliToolReconciliation
+
+jobs:
+- job: mirror
+  pool:
+    vmImage: ubuntu-latest
+  # Skip when the ADO push came from the inbound pipeline (build service),
+  # not from a real user. Checks both trigger paths:
+  #   - CI fire from inbound's `git push origin` → Build.RequestedFor = build service
+  #   - Service Hook fire from same push → webhook payload pushedBy = build service
+  # For real user pushes, cron, and manual triggers, neither field matches.
+  condition: |
+    and(
+      ne(variables['Build.RequestedFor'], 'Project Collection Build Service (NBGIDP)'),
+      ne('${{ parameters.adopush.resource.pushedBy.displayName }}', 'Project Collection Build Service (NBGIDP)')
+    )
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    clean: true
+    persistCredentials: true
+
+  - bash: |
+      set -euo pipefail
+      echo "$GITHUB_APP_PRIVATE_KEY_B64" | base64 -d > /tmp/app.pem
+      header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64 -w0 | tr -d '=' | tr '/+' '_-')
+      now=$(date +%s)
+      payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((now-60))" "$((now+540))" "$GITHUB_APP_ID" | base64 -w0 | tr -d '=' | tr '/+' '_-')
+      sig=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign /tmp/app.pem -binary | base64 -w0 | tr -d '=' | tr '/+' '_-')
+      jwt="$header.$payload.$sig"
+      token=$(curl -fsS -X POST -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/$GITHUB_APP_INSTALLATION_ID/access_tokens" | python3 -c "import json,sys;print(json.load(sys.stdin)['token'])")
+      echo "##vso[task.setvariable variable=GH_TOKEN;issecret=true]$token"
+      rm -f /tmp/app.pem
+    env:
+      GITHUB_APP_ID: $(GITHUB_APP_ID)
+      GITHUB_APP_INSTALLATION_ID: $(GITHUB_APP_INSTALLATION_ID)
+      GITHUB_APP_PRIVATE_KEY_B64: $(GITHUB_APP_PRIVATE_KEY_B64)
+    displayName: Mint GitHub App installation token
+
+  - bash: |
+      set -euo pipefail
+      git fetch origin --prune --prune-tags '+refs/heads/*:refs/remotes/origin/*'
+      git fetch origin --tags
+      # Drop the symbolic refs/remotes/origin/HEAD that git auto-creates after
+      # clone/fetch. Without this, the wildcard push below copies it to the
+      # destination as a literal refs/heads/HEAD branch — which git's --prune
+      # then refuses to delete, since it treats "HEAD" as a reserved symbolic.
+      # IMPORTANT: --no-deref. Without it, `update-ref -d` follows the symbolic
+      # ref and deletes its TARGET (refs/remotes/origin/main), which then makes
+      # the wildcard push try to delete refs/heads/main on the destination and
+      # the destination rejects it. Same hazard for `git symbolic-ref --delete`
+      # which we use as a fallback because some git versions don't accept
+      # `update-ref --no-deref` for the symbolic-ref form.
+      git symbolic-ref --delete refs/remotes/origin/HEAD 2>/dev/null \
+        || git update-ref --no-deref -d refs/remotes/origin/HEAD 2>/dev/null \
+        || true
+      git push --prune "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPO}.git" '+refs/remotes/origin/*:refs/heads/*'
+      git push --prune "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPO}.git" '+refs/tags/*:refs/tags/*'
+    env:
+      GH_TOKEN: $(GH_TOKEN)
+    displayName: Mirror all branches and tags to GitHub
