@@ -30,25 +30,29 @@ npm link                            # creates `tabrecon` on PATH via Node's bin
 # 3. run the suite (Node ≥ 22.18 required, type stripping is native)
 cd ../.. && npm test                # 34 tests, ~1 second
 
-# 4. smoke test on synthetic data — works from any directory
-mkdir -p /tmp/try && cd /tmp/try
-printf 'Account,Product,Amount\n2001,P1,100.50\n2001,P2,200.00\n2003,P9,75.25\n' > a.csv
-printf 'GL Account,Product Code,Sum Amount\n20-01,P1,100.50\n20-01,P2,210.00\n20-04,P3,99.99\n' > b.csv
+# 4. smoke test on any two files — one command, no decisions needed
+cd /path/to/your/files
 
-# first run — exits 0 with "decisions_needed" + ranked key/level candidates
-tabrecon run --file-a a.csv --file-b b.csv --db demo.db
+# The end-user mode: tabrecon ingests both, detects column types and
+# hierarchies, picks the highest-confidence join keys and decimal compare
+# columns from the structural candidates it computes, persists them as the
+# pair's memory, and reconciles. Output explains every auto-pick.
+tabrecon run --auto --file-a A.xlsx --file-b B.xlsx
 
-# record the decisions once (this is the pair's persistent memory)
-tabrecon map --pair "a vs b" --db demo.db \
-  --key "account=gl account" --key "product=product code:1" \
-  --compare "amount=sum amount" --display "product=product code"
+# Next month, same schemas — even --auto is unnecessary; mappings are
+# remembered, so this runs zero-decision:
+tabrecon run --file-a A-may.xlsx --file-b B-may.xlsx
 
-# re-run — full pipeline, findings land in SQLite (no report file written)
-tabrecon run --file-a a.csv --file-b b.csv --db demo.db
-
-# query findings — this is what the LLM does to shape any report
-sqlite3 demo.db "SELECT bucket, key_json, delta_micros FROM RunFinding WHERE level = 0;"
+# Query findings — the LLM/agent layer shapes any report from these tables
+sqlite3 recon.db "SELECT bucket, key_json, delta_micros FROM RunFinding WHERE level = 0;"
 ```
+
+> **Agent mode (default, when `--auto` is not passed):** if the pair has no
+> mappings yet, `run` exits 0 with a `decisions_needed` JSON containing
+> ranked key/compare candidates and hierarchy-driven level proposals — the
+> agent reviews, records mappings with `tabrecon map`, and re-runs. Pairs
+> with mappings already on record always run zero-decision regardless of
+> `--auto`.
 
 > Without step 2 you'd run the CLI as `node /path/to/tools/tabrecon/src/cli.ts …` — `npm link` just wires it onto `$PATH` so `tabrecon` works from anywhere. Reverse with `npm unlink -g tabrecon` from the tool folder.
 

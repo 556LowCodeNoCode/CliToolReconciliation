@@ -174,6 +174,32 @@ test("rule / report commands are gone", () => {
   assert.match(report.stderr, /error\(UsageError\): Unknown command "report"/);
 });
 
+test("end-user mode: `run --auto` ingests + maps + reconciles from two file paths only", () => {
+  // Fresh DB; the user gave us two files and nothing else.
+  const r = cli([
+    "run", "--auto", "--db", "auto.db",
+    "--file-a", "april-a.csv", "--file-b", "april-b.csv", "--json",
+  ]);
+  assert.equal(r.status, 0);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.status, "completed", "auto should reconcile end-to-end on the first try");
+  // It picked some mappings — at least one key + at least one compare
+  assert.ok(out.autoMappings.some((m: { role: string }) => m.role === "key"));
+  assert.ok(out.autoMappings.some((m: { role: string }) => m.role === "compare"));
+  // And it produced findings on the planted differences
+  assert.ok(out.reconcile.totalFindings >= 2, `expected ≥2 findings, got ${out.reconcile.totalFindings}`);
+
+  // Next run on the same pair reuses the persisted mappings — no auto needed
+  const r2 = cli([
+    "run", "--db", "auto.db",
+    "--file-a", "may-a.csv", "--file-b", "may-b.csv", "--json",
+  ]);
+  assert.equal(r2.status, 0);
+  const out2 = JSON.parse(r2.stdout);
+  assert.equal(out2.status, "completed");
+  assert.equal(out2.autoMappings, undefined, "second run uses persisted mappings, not auto");
+});
+
 test("hierarchy command surfaces aggregation chains for an ingested file", () => {
   // Fixture with a real aggregation chain: country → city → district.
   // Each district sits in exactly one city (FD district→city), each city sits

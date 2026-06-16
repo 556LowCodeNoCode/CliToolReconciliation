@@ -221,7 +221,7 @@ test("memory: a returning fixed-width file is recognized via the stored parse sp
   db.close();
 });
 
-test("xlsx real-world lexicals: spec renames duplicate headers; float artifacts and scientific notation normalize", () => {
+test("xlsx real-world lexicals: duplicate headers auto-dedupe; float artifacts and scientific notation normalize", () => {
   const db = openDatabase(join(dir, "xlsx-real.db"));
   const f = xlsxFile("fpsl-like.xlsx", [
     ["G/L Account", "G/L Account", "Closing Balance"],
@@ -229,40 +229,44 @@ test("xlsx real-world lexicals: spec renames duplicate headers; float artifacts 
     ["1712030023", "ΔΑΝΕΙΑ", "7.0000000000000007E-2"],
     ["1712030024", "ΛΟΙΠΑ", "-2.5E+3"],
   ]);
-  // duplicate header without a spec is rejected loudly
-  assert.throws(() => ingestFile(db, { filePath: f }), /HeaderDetectionError|duplicate/);
-  const out = ingestFile(db, {
-    filePath: f,
-    profileName: "fpsl-like",
-    spec: { type: "xlsx", columns: ["GL Account", "GL Account Name", "Closing Balance"] },
-  });
+  // Duplicate xlsx headers are auto-renamed: the second "G/L Account" becomes "G/L Account (2)".
+  const out = ingestFile(db, { filePath: f });
   assert.equal(out.rowCount, 3);
+  assert.equal(out.columns[0]!.name, "G/L Account");
+  assert.equal(out.columns[1]!.name, "G/L Account (2)");
   assert.equal(out.columns[2]!.type, "decimal");
   const rows = db.prepare(`SELECT * FROM "${out.datasetTable}" ORDER BY src_row`).all() as Record<string, string>[];
   const col = out.columns[2]!.sqlName;
   assert.equal(rows[0]![col], "100947574.4"); // artifact rounded at 6th decimal
   assert.equal(rows[1]![col], "0.07"); // scientific notation expanded exactly
   assert.equal(rows[2]![col], "-2500"); // negative scientific, positive exponent
+  // Truly empty headers still surface as a hard error (sentinel — auto-dedup must not mask that).
+  assert.throws(
+    () =>
+      ingestFile(db, {
+        filePath: xlsxFile("empty-header.xlsx", [["A", "", "C"], ["1", "x", "2"]]),
+      }),
+    /HeaderDetectionError|empty/,
+  );
   db.close();
 });
 
-test("memory: a returning xlsx file is recognized via the stored xlsx spec", () => {
+test("memory: a returning xlsx file is recognized after the first ingest (auto-dedupe path, no spec)", () => {
   const db = openDatabase(join(dir, "xlsx-spec-memory.db"));
-  const spec = { type: "xlsx", columns: ["GL Account", "GL Account Name", "Closing Balance"] };
   const april = xlsxFile("x-april.xlsx", [
     ["G/L Account", "G/L Account", "Closing Balance"],
     ["1001", "ΟΜΟΛΟΓΑ", "100.00"],
     ["1002", "ΔΑΝΕΙΑ", "200.00"],
   ]);
-  const first = ingestFile(db, { filePath: april, spec });
-  assert.equal(first.specSource, "flag");
+  const first = ingestFile(db, { filePath: april });
+  assert.equal(first.specSource, null); // no spec needed — auto-deduped
+  assert.equal(first.routing, "created_new_profile");
   const may = xlsxFile("x-may.xlsx", [
     ["G/L Account", "G/L Account", "Closing Balance"],
     ["1001", "ΟΜΟΛΟΓΑ", "110.00"],
     ["1002", "ΔΑΝΕΙΑ", "200.00"],
   ]);
   const second = ingestFile(db, { filePath: may });
-  assert.equal(second.specSource, "profile_memory");
   assert.equal(second.routing, "attached_existing");
   assert.equal(second.profileName, first.profileName);
   db.close();

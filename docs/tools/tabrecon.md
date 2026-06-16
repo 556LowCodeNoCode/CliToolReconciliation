@@ -52,7 +52,7 @@ node tools/tabrecon/src/cli.ts <command> [flags]
 | `suggest --pair <n>` | Join-key statistics (uniqueness, overlap, null rates — persisted as `JoinKeyStat`), compare-column candidates ranked by Jaro-Winkler name similarity, and **proposed level ordering** derived from both files' hierarchies (level 0 = coarsest joint grain; each subsequent level refines via an aggregation edge present on both sides). |
 | `map --pair <n> --key "a=b[:level][:raw]"... --compare "a=b"... --display "a=b"... [--clear]` | Record the pair's column mappings (the pair's memory). Levels enable hierarchical drill-down. |
 | `reconcile --pair <n>` | Run the structural engine: aggregate-first hierarchical comparison with configured absolute tolerance, ONLY_A / ONLY_B / MATCH / DIFFER bucketing, m2m guard. **No business rules applied.** Persists `Run`, `RunLevelStat`, `RunFinding` (with `parent_finding_id` hierarchy and `lineage_json` down to source rows). |
-| `run --file-a <p> --file-b <p> [...]` | Full pipeline: ingest A + B → if pair has mappings, reconcile → else exit 0 with `decisions_needed` (suggestions + proposed levels included). Recognized pairs run zero-decision. |
+| `run --file-a <p> --file-b <p> [--auto] [...]` | Full pipeline: ingest A + B → if pair has mappings, reconcile → else (with `--auto`) auto-pick mappings from top-ranked structural candidates and reconcile; (without `--auto`) exit 0 with `decisions_needed`. Recognized pairs always run zero-decision. `--auto` picks: level-0 key = top-ranked join candidate (overlap ≥ 0.5, rank ≥ 0.02), optional level-1 key = next-best on different columns, compare = decimal-vs-decimal pairs preferring name similarity (Jaro-Winkler ≥ 0.6) and falling back to the largest-total decimal column on each side. xlsx files with duplicate headers (a column heading repeated for "code" + "description") have their second-and-later occurrences auto-renamed to `"<name> (2)"`. |
 | `document [--schema-out <p>]` | Machine-generated DB structure documentation. |
 
 ## Why no business rules and no report
@@ -91,7 +91,21 @@ Four-tier resolution, lowest to highest priority: shell env → `~/.tool-agents/
 
 Singular table names. `Meta`, `Profile`, `LoadedFile`, `Fingerprint`, `DatasetColumn`, `ColumnHierarchy`, `ReconPair`, `ColumnMapping`, `JoinKeyStat`, `Run`, `RunLevelStat`, `RunFinding`, plus per-file `Dataset<N>` tables. All amounts persisted as exact decimal strings; the engine computes on ×10⁶ BigInt micro-units — no binary floats anywhere in an amount path. Run `document` for the always-current generated description.
 
-## Example (LLM-operated session)
+## Example — end-user mode (one command, two file paths)
+
+```bash
+tabrecon run --auto --file-a A.xlsx --file-b B.xlsx
+```
+
+The CLI handles everything: encoding/type detection, duplicate-header
+auto-dedup for xlsx, fingerprint-based file recognition, hierarchy
+discovery, join-key + compare-column auto-picking from structural
+candidates, persistence of the pair's memory, and the reconciliation
+itself. Output explains every auto-pick so it's auditable, and emits a
+warning when a fallback heuristic was used (e.g. compare picked by total
+magnitude when no name match existed). Next month's files run zero-decision.
+
+## Example — agent-operated session (with explicit control)
 
 ```bash
 # 1. ingest two files. First time: discovers hierarchy chains + descriptive attributes.
@@ -99,7 +113,7 @@ tabrecon ingest --file ledger-april.csv --profile ledger
 # →  hierarchy:  aggregation chain(s) (top → drill-down):
 #                  account_class → account_type → account_code
 
-tabrecon ingest --file extract-april.xlsx --profile extract --spec extract.json
+tabrecon ingest --file extract-april.xlsx --profile extract
 
 # 2. first time: decisions_needed with hierarchy-driven level proposal.
 tabrecon run --file-a ledger-april.csv --file-b extract-april.xlsx --json

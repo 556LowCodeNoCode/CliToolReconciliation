@@ -1,6 +1,6 @@
 {
   "name": "tabrecon",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Generic LLM-driven tabular reconciliation engine + memory layer: multi-format ingestion, fingerprint memory, hierarchy detection, structural reconcile. Business rules and report shape live in the LLM/agent layer above the CLI.",
   "type": "module",
   "private": true,

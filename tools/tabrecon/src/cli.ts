@@ -36,6 +36,7 @@ import { suggestMappings, type SuggestResult } from "./keys.ts";
 import { renderSchemaDoc } from "./document.ts";
 import { runReconcile, type ReconcileSummary } from "./reconcile.ts";
 import { aggregationChains, loadColumnHierarchy, proposeJoinLevels, type PairLevelProposal, type FunctionalDependency } from "./hierarchy.ts";
+import { autoPickMappings, type AutoMapping } from "./auto.ts";
 
 /* ----------------------------------------------------------- arg parsing */
 
@@ -48,7 +49,7 @@ interface ParsedArgs {
   version: boolean;
 }
 
-const BOOLEAN_FLAGS = new Set(["json", "fail-on-findings", "clear"]);
+const BOOLEAN_FLAGS = new Set(["json", "fail-on-findings", "clear", "auto"]);
 const MULTI_FLAGS = new Set(["key", "compare", "display"]);
 const SUBCOMMANDS: Record<string, string[]> = {
   profile: ["list", "show", "attach"],
@@ -301,6 +302,8 @@ interface RunCommandResult {
   suggest?: SuggestWithLevels;
   reconcile?: ReconcileSummary;
   reasons?: string[];
+  autoMappings?: AutoMapping[];
+  autoWarnings?: string[];
 }
 
 function doRun(db: DatabaseSync, cfg: ToolConfig, flags: Record<string, string | boolean>): RunCommandResult {
@@ -360,24 +363,67 @@ function doRun(db: DatabaseSync, cfg: ToolConfig, flags: Record<string, string |
       )
       .get(pairId) as { k: number | null; c: number | null }
   );
+  let autoMappings: AutoMapping[] | undefined;
+  let autoWarnings: string[] | undefined;
   if ((mappingCount.k ?? 0) === 0 || (mappingCount.c ?? 0) === 0) {
-    const suggest = suggestWithLevels(
-      db,
-      pairId,
-      { id: outA.loadedFileId, table: outA.datasetTable },
-      { id: outB.loadedFileId, table: outB.datasetTable },
-    );
-    return {
-      status: "decisions_needed",
-      ingestA: outA,
-      ingestB: outB,
-      pairName,
-      suggest,
-      reasons: [
-        `pair "${pairName}" has no key/compare mappings yet — decide from the candidates and record them with: ` +
-          `${TOOL_NAME} map --pair "${pairName}" --key "<colA>=<colB>" --compare "<colA>=<colB>"`,
-      ],
-    };
+    if (flags["auto"] === true) {
+      // Auto-pick mappings from the structural candidates the tool already
+      // computes. If anything ambiguous remains, fall through to the
+      // decisions_needed path so the agent can resolve it.
+      const auto = autoPickMappings(
+        db,
+        pairId,
+        { id: outA.loadedFileId, table: outA.datasetTable },
+        { id: outB.loadedFileId, table: outB.datasetTable },
+      );
+      const hasKey = auto.mappings.some((m) => m.role === "key" && m.level === 0);
+      const hasCompare = auto.mappings.some((m) => m.role === "compare");
+      if (hasKey && hasCompare) {
+        const ins = db.prepare(
+          "INSERT INTO ColumnMapping (recon_pair_id, role, level, col_a, col_b, norm_mode) VALUES (?, ?, ?, ?, ?, ?)",
+        );
+        for (const m of auto.mappings) {
+          ins.run(pairId, m.role, m.level, m.colA, m.colB, m.normMode);
+        }
+        autoMappings = auto.mappings;
+        autoWarnings = auto.warnings;
+      } else {
+        const suggest = suggestWithLevels(
+          db,
+          pairId,
+          { id: outA.loadedFileId, table: outA.datasetTable },
+          { id: outB.loadedFileId, table: outB.datasetTable },
+        );
+        return {
+          status: "decisions_needed",
+          ingestA: outA,
+          ingestB: outB,
+          pairName,
+          suggest,
+          reasons: [
+            `--auto could not confidently pick mappings for pair "${pairName}". Reasons: ${auto.warnings.join("; ") || "no good key/compare candidates"}. Record mappings manually with: ${TOOL_NAME} map --pair "${pairName}" --key "<colA>=<colB>" --compare "<colA>=<colB>"`,
+          ],
+        };
+      }
+    } else {
+      const suggest = suggestWithLevels(
+        db,
+        pairId,
+        { id: outA.loadedFileId, table: outA.datasetTable },
+        { id: outB.loadedFileId, table: outB.datasetTable },
+      );
+      return {
+        status: "decisions_needed",
+        ingestA: outA,
+        ingestB: outB,
+        pairName,
+        suggest,
+        reasons: [
+          `pair "${pairName}" has no key/compare mappings yet — decide from the candidates and record them with: ` +
+            `${TOOL_NAME} map --pair "${pairName}" --key "<colA>=<colB>" --compare "<colA>=<colB>" — or re-run with --auto to let the tool pick from the top-ranked candidates.`,
+        ],
+      };
+    }
   }
 
   const summary = runReconcile(db, {
@@ -393,6 +439,8 @@ function doRun(db: DatabaseSync, cfg: ToolConfig, flags: Record<string, string |
     ingestB: outB,
     pairName,
     reconcile: summary,
+    ...(autoMappings !== undefined ? { autoMappings } : {}),
+    ...(autoWarnings !== undefined ? { autoWarnings } : {}),
   };
 }
 
@@ -440,12 +488,16 @@ COMMANDS
              rules. Persists Run / RunLevelStat / RunFinding (with parent_finding_id
              hierarchy and lineage_json down to source rows) in SQLite. Apply
              business semantics by querying those tables.
-  run        --file-a <path> --file-b <path> [--pair <n>] [--profile-a <n>]
-             [--profile-b <n>] [--spec-a <json|@file>] [--spec-b <json|@file>]
-             [--tolerance <d>] [--fail-on-findings]
-             Full pipeline up to and including reconcile. Unknown files/pairs
-             exit 0 with a structured "decisions needed" result; recognized
-             pairs run end-to-end with zero decisions.
+  run        --file-a <path> --file-b <path> [--auto] [--pair <n>]
+             [--profile-a <n>] [--profile-b <n>] [--spec-a <json|@file>]
+             [--spec-b <json|@file>] [--tolerance <d>] [--fail-on-findings]
+             Full pipeline up to and including reconcile. With --auto: when a
+             new pair has no mappings yet, picks the highest-confidence join
+             keys and decimal compare columns automatically from the
+             structural candidates, persists them as the pair's memory, and
+             continues to reconcile. Without --auto: exits 0 with a
+             "decisions_needed" result for the agent to resolve. Recognized
+             pairs (mappings already on record) always run zero-decision.
   document   [--schema-out <path>]     Machine-generated DB structure doc.
 
 GLOBAL FLAGS
@@ -459,6 +511,8 @@ GLOBAL FLAGS
   --m2m-pair-cap <n>    Max raw row pairings per finest-level key.
                         Default: ${DEFAULTS.m2mPairCap}. Env: TABRECON_M2M_PAIR_CAP
   --fail-on-findings    Exit 1 when level-0 findings > 0 (CI gating).
+  --auto                (run only) Auto-pick mappings on first encounter so
+                        an end user with two files needs nothing else.
 
 CONFIGURATION RESOLUTION (lowest → highest)
   shell env → ~/.tool-agents/${TOOL_NAME}/.env → ./.env → CLI flags.
@@ -644,6 +698,14 @@ function main(): number {
           if (result.suggest) human.push(...describeSuggest(result.suggest));
           emit(cfg, human, result);
           return 0;
+        }
+        if (result.autoMappings !== undefined) {
+          human.push("Phase: auto-map");
+          for (const m of result.autoMappings) {
+            const lvl = m.role === "key" ? `:${m.level}` : "";
+            human.push(`  ${m.role.padEnd(7)} ${m.colA}=${m.colB}${lvl}   [${m.rationale}]`);
+          }
+          for (const w of result.autoWarnings ?? []) human.push(`  warn:   ${w}`);
         }
         human.push("Phase: reconcile", ...describeReconcile(result.reconcile!));
         emit(cfg, human, result);

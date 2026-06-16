@@ -130,6 +130,23 @@ function parseWithSpec(
   return { format: "delimited", encoding: "", header: [...spec.columns!], data: matrix, forced: new Map() };
 }
 
+/**
+ * Append " (2)", " (3)", ... to second-and-later occurrences of an otherwise
+ * duplicate (case-insensitive, NFKC-normalized) header name. Used for xlsx
+ * sources where the same heading is often repeated for "code" + "description"
+ * columns rendered identically by the upstream exporter.
+ */
+export function dedupeHeaders(header: readonly string[]): string[] {
+  const seen = new Map<string, number>();
+  return header.map((raw) => {
+    const norm = raw.normalize("NFKC").toLowerCase().trim();
+    if (norm === "") return raw; // assertHeaderRow will surface this as a real error.
+    const count = (seen.get(norm) ?? 0) + 1;
+    seen.set(norm, count);
+    return count === 1 ? raw : `${raw} (${count})`;
+  });
+}
+
 function autoParse(fileName: string, text: string): ParsedMatrix {
   const delimiter = sniffDelimiter(fileName, text);
   const matrix = parseDelimited(fileName, text, delimiter);
@@ -284,9 +301,15 @@ export function ingestFile(db: DatabaseSync, opts: IngestOptions): IngestOutcome
       parsed = fromXlsxSpec(specUsed);
       specSource = "flag";
     } else {
+      // Auto-dedupe duplicate xlsx headers (very common: a column repeated
+      // for "code" and "description" rendered with the same heading). Second
+      // and later occurrences get " (2)", " (3)" suffixes so the assert and
+      // every downstream consumer see distinct names without a hand spec.
+      const dedupedHeader = dedupeHeaders(matrix[0]!);
+      const dedupedMatrix = [dedupedHeader, ...matrix.slice(1)];
       try {
-        assertHeaderRow(fileName, matrix[0]!);
-        parsed = { format: "xlsx", encoding: "n/a", header: matrix[0]!, data: matrix.slice(1), forced: new Map() };
+        assertHeaderRow(fileName, dedupedHeader);
+        parsed = { format: "xlsx", encoding: "n/a", header: dedupedHeader, data: dedupedMatrix.slice(1), forced: new Map() };
       } catch (autoErr) {
         adoptMatch(
           matchStoredSpecs((spec) => {
