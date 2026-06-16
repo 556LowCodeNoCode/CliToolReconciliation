@@ -1,0 +1,11 @@
+{
+  "name": "newrecon-project",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test_scripts/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

@@ -1,0 +1,34 @@
+# node
+node_modules/
+npm-debug.log*
+yarn-error.log
+
+# sqlite databases produced by ingest / reconcile / tests
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# environment files (4-tier config tier 3)
+.env
+.env.*
+!.env.example
+
+# os / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# generated artifacts the CLI writes
+tabrecon-schema.md
+tabrecon-report-*.md
+
+# typescript output (we never emit, but just in case)
+*.tsbuildinfo
+dist/
+build/
+out/
+
+# temp directories used during development / smoke tests
+/tmp-tabrecon/
