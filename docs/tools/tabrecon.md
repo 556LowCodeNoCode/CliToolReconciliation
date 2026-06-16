@@ -91,6 +91,22 @@ Four-tier resolution, lowest to highest priority: shell env → `~/.tool-agents/
 
 Singular table names. `Meta`, `Profile`, `LoadedFile`, `Fingerprint`, `DatasetColumn`, `ColumnHierarchy`, `ReconPair`, `ColumnMapping`, `JoinKeyStat`, `Run`, `RunLevelStat`, `RunFinding`, plus per-file `Dataset<N>` tables. All amounts persisted as exact decimal strings; the engine computes on ×10⁶ BigInt micro-units — no binary floats anywhere in an amount path. Run `document` for the always-current generated description.
 
+### Tip for any agent/LLM querying `RunFinding`
+
+Column names are stored verbatim from the source files — slashes, spaces, Greek letters, anything. `RunFinding.key_json` uses the same verbatim names as JSON object keys. Before writing SQL against findings, look the column names up in `ColumnMapping`:
+
+```sql
+SELECT level, col_a, col_b FROM ColumnMapping WHERE recon_pair_id = ? AND role = 'key' ORDER BY level;
+```
+
+Then build the JSON path with proper quoting:
+
+```sql
+SELECT json_extract(key_json, '$."<col_a verbatim>"') AS my_key FROM RunFinding WHERE ...
+```
+
+The tool deliberately does not sanitize column names; any "fix" for one quirky character would be a hardcode that breaks a different one tomorrow.
+
 ## Example — end-user mode (one command, two file paths)
 
 ```bash
